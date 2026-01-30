@@ -2,7 +2,6 @@ package bundler
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,78 +10,161 @@ import (
 	"github.com/plaid/llm-context-bundler/internal/walker"
 )
 
-// Bundler assembles markdown files into a single output file.
+const (
+	// MaxFileSize is the maximum size for a single output file (100 MB).
+	MaxFileSize = 100 * 1024 * 1024
+)
+
+// Bundler assembles markdown files into output file(s).
 type Bundler struct {
-	rootDir string
-	output  io.Writer
-	verbose bool
+	rootDir    string
+	outputPath string
+	verbose    bool
 }
 
 // New creates a new Bundler.
-func New(rootDir string, output io.Writer, verbose bool) *Bundler {
+func New(rootDir, outputPath string, verbose bool) *Bundler {
 	return &Bundler{
-		rootDir: rootDir,
-		output:  output,
-		verbose: verbose,
+		rootDir:    rootDir,
+		outputPath: outputPath,
+		verbose:    verbose,
 	}
 }
 
-// Bundle processes all files and writes them to the output.
-func (b *Bundler) Bundle(files []walker.FileInfo) error {
-	// Write header
-	fmt.Fprintln(b.output, "# Bundled Context")
-	fmt.Fprintln(b.output)
+// fileContent holds a file's path and its content.
+type fileContent struct {
+	path    string
+	content []byte
+}
 
-	// Write table of contents
-	fmt.Fprintln(b.output, "## Table of Contents")
-	for _, file := range files {
-		anchor := pathToAnchor(file.Path)
-		fmt.Fprintf(b.output, "- [%s](#%s)\n", file.Path, anchor)
-	}
-	fmt.Fprintln(b.output)
-
-	// Write each file
+// Bundle processes all files and writes them to output file(s).
+// Returns the list of output files created.
+func (b *Bundler) Bundle(files []walker.FileInfo) ([]string, error) {
+	// Read all file contents first
+	var contents []fileContent
 	for _, file := range files {
 		content, err := os.ReadFile(filepath.Join(b.rootDir, file.Path))
 		if err != nil {
-			// Warn and skip unreadable files
 			fmt.Fprintf(os.Stderr, "warning: could not read %s: %v\n", file.Path, err)
 			continue
 		}
+		contents = append(contents, fileContent{
+			path:    file.Path,
+			content: content,
+		})
+	}
 
+	if len(contents) == 0 {
+		return nil, fmt.Errorf("no readable files to bundle")
+	}
+
+	// Calculate sizes and determine how to split
+	parts := b.splitIntoParts(contents)
+
+	// Write each part
+	var outputFiles []string
+	for i, part := range parts {
+		outputPath := b.getPartPath(i, len(parts))
+		if err := b.writePart(outputPath, part); err != nil {
+			return outputFiles, err
+		}
+		outputFiles = append(outputFiles, outputPath)
+	}
+
+	return outputFiles, nil
+}
+
+// splitIntoParts divides files into parts that fit within MaxFileSize.
+func (b *Bundler) splitIntoParts(contents []fileContent) [][]fileContent {
+	var parts [][]fileContent
+	var currentPart []fileContent
+	var currentSize int
+
+	for _, fc := range contents {
+		// Estimate size: content + header overhead (~100 bytes per file)
+		fileSize := len(fc.content) + 100
+
+		// If adding this file would exceed the limit, start a new part
+		// (unless current part is empty - always include at least one file)
+		if currentSize+fileSize > MaxFileSize && len(currentPart) > 0 {
+			parts = append(parts, currentPart)
+			currentPart = nil
+			currentSize = 0
+		}
+
+		currentPart = append(currentPart, fc)
+		currentSize += fileSize
+	}
+
+	// Don't forget the last part
+	if len(currentPart) > 0 {
+		parts = append(parts, currentPart)
+	}
+
+	return parts
+}
+
+// getPartPath returns the output path for a given part number.
+func (b *Bundler) getPartPath(partIndex, totalParts int) string {
+	if totalParts == 1 {
+		return b.outputPath
+	}
+
+	// Split filename and extension
+	ext := filepath.Ext(b.outputPath)
+	base := strings.TrimSuffix(b.outputPath, ext)
+
+	return fmt.Sprintf("%s_part%d%s", base, partIndex+1, ext)
+}
+
+// writePart writes a single part file.
+func (b *Bundler) writePart(outputPath string, contents []fileContent) error {
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("could not create %s: %w", outputPath, err)
+	}
+	defer file.Close()
+
+	// Write header
+	fmt.Fprintln(file, "# Bundled Context")
+	fmt.Fprintln(file)
+
+	// Write table of contents
+	fmt.Fprintln(file, "## Table of Contents")
+	for _, fc := range contents {
+		anchor := pathToAnchor(fc.path)
+		fmt.Fprintf(file, "- [%s](#%s)\n", fc.path, anchor)
+	}
+	fmt.Fprintln(file)
+
+	// Write each file
+	for _, fc := range contents {
 		// Write separator
-		fmt.Fprintln(b.output, "---")
-		fmt.Fprintln(b.output)
+		fmt.Fprintln(file, "---")
+		fmt.Fprintln(file)
 
 		// Write source header
-		fmt.Fprintf(b.output, "<!-- SOURCE: %s -->\n", file.Path)
+		fmt.Fprintf(file, "<!-- SOURCE: %s -->\n", fc.path)
 
 		// Write content
-		b.output.Write(content)
+		file.Write(fc.content)
 
 		// Ensure newline at end
-		if len(content) > 0 && content[len(content)-1] != '\n' {
-			fmt.Fprintln(b.output)
+		if len(fc.content) > 0 && fc.content[len(fc.content)-1] != '\n' {
+			fmt.Fprintln(file)
 		}
-		fmt.Fprintln(b.output)
+		fmt.Fprintln(file)
 	}
 
 	return nil
 }
 
 // pathToAnchor converts a file path to a GitHub-compatible markdown anchor.
-// Example: "chapters/chapter-1.md" -> "chapterschapter-1md"
 func pathToAnchor(path string) string {
-	// Convert to lowercase
 	anchor := strings.ToLower(path)
-
-	// Replace path separators with empty string
 	anchor = strings.ReplaceAll(anchor, "/", "")
 	anchor = strings.ReplaceAll(anchor, "\\", "")
-
-	// Remove characters that aren't alphanumeric, hyphen, or underscore
 	reg := regexp.MustCompile(`[^a-z0-9\-_]`)
 	anchor = reg.ReplaceAllString(anchor, "")
-
 	return anchor
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/plaid/llm-context-bundler/internal/bundler"
 	"github.com/plaid/llm-context-bundler/internal/ignore"
@@ -57,20 +58,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "found %d markdown files\n", len(files))
 	}
 
-	// Create output file
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: could not create output file: %v\n", err)
-		os.Exit(1)
-	}
-	defer outFile.Close()
-
 	// Bundle the files
-	b := bundler.New(rootDir, outFile, verbose)
-	if err := b.Bundle(files); err != nil {
+	b := bundler.New(rootDir, outputPath, verbose)
+	outputFiles, err := b.Bundle(files)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not bundle files: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "bundled %d files to %s\n", len(files), outputPath)
+	fmt.Fprintf(os.Stderr, "bundled %d files to %s\n", len(files), strings.Join(outputFiles, ", "))
 }
