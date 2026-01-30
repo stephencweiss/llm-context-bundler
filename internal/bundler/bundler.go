@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/plaid/llm-context-bundler/internal/walker"
 )
@@ -27,7 +29,20 @@ func New(rootDir string, output io.Writer, verbose bool) *Bundler {
 
 // Bundle processes all files and writes them to the output.
 func (b *Bundler) Bundle(files []walker.FileInfo) error {
-	for i, file := range files {
+	// Write header
+	fmt.Fprintln(b.output, "# Bundled Context")
+	fmt.Fprintln(b.output)
+
+	// Write table of contents
+	fmt.Fprintln(b.output, "## Table of Contents")
+	for _, file := range files {
+		anchor := pathToAnchor(file.Path)
+		fmt.Fprintf(b.output, "- [%s](#%s)\n", file.Path, anchor)
+	}
+	fmt.Fprintln(b.output)
+
+	// Write each file
+	for _, file := range files {
 		content, err := os.ReadFile(filepath.Join(b.rootDir, file.Path))
 		if err != nil {
 			// Warn and skip unreadable files
@@ -35,11 +50,9 @@ func (b *Bundler) Bundle(files []walker.FileInfo) error {
 			continue
 		}
 
-		// Write separator (except for first file)
-		if i > 0 {
-			fmt.Fprintln(b.output, "---")
-			fmt.Fprintln(b.output)
-		}
+		// Write separator
+		fmt.Fprintln(b.output, "---")
+		fmt.Fprintln(b.output)
 
 		// Write source header
 		fmt.Fprintf(b.output, "<!-- SOURCE: %s -->\n", file.Path)
@@ -55,4 +68,21 @@ func (b *Bundler) Bundle(files []walker.FileInfo) error {
 	}
 
 	return nil
+}
+
+// pathToAnchor converts a file path to a GitHub-compatible markdown anchor.
+// Example: "chapters/chapter-1.md" -> "chapterschapter-1md"
+func pathToAnchor(path string) string {
+	// Convert to lowercase
+	anchor := strings.ToLower(path)
+
+	// Replace path separators with empty string
+	anchor = strings.ReplaceAll(anchor, "/", "")
+	anchor = strings.ReplaceAll(anchor, "\\", "")
+
+	// Remove characters that aren't alphanumeric, hyphen, or underscore
+	reg := regexp.MustCompile(`[^a-z0-9\-_]`)
+	anchor = reg.ReplaceAllString(anchor, "")
+
+	return anchor
 }
