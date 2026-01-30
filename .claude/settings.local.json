@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./lcb:*)"
+      "Bash(./lcb:*)",
+      "Bash(~/.local/bin/lcb:*)"
     ]
   }
 }
