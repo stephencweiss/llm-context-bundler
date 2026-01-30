@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// Default directories to exclude from scanning.
+var defaultExclusions = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	"vendor":       true,
+}
+
 // FileInfo holds information about a discovered markdown file.
 type FileInfo struct {
 	Path  string // Relative path from root
@@ -15,6 +22,7 @@ type FileInfo struct {
 
 // Walk recursively finds all .md files in the given root directory.
 // Files are returned sorted by depth (shallower first), then alphabetically.
+// Automatically skips .git, node_modules, vendor, and hidden directories.
 func Walk(root string) ([]FileInfo, error) {
 	var files []FileInfo
 
@@ -23,13 +31,27 @@ func Walk(root string) ([]FileInfo, error) {
 			return err
 		}
 
-		// Skip directories (we just want files)
+		name := d.Name()
+
+		// Skip excluded and hidden directories
 		if d.IsDir() {
+			if defaultExclusions[name] {
+				return fs.SkipDir
+			}
+			// Skip hidden directories (starting with .) except root
+			if strings.HasPrefix(name, ".") && path != root {
+				return fs.SkipDir
+			}
+			return nil
+		}
+
+		// Skip hidden files
+		if strings.HasPrefix(name, ".") {
 			return nil
 		}
 
 		// Only process .md files
-		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+		if !strings.HasSuffix(strings.ToLower(name), ".md") {
 			return nil
 		}
 
