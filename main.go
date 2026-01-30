@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/plaid/llm-context-bundler/internal/bundler"
+	"github.com/plaid/llm-context-bundler/internal/ignore"
 	"github.com/plaid/llm-context-bundler/internal/walker"
 )
 
@@ -31,8 +33,16 @@ func main() {
 		}
 	}
 
+	// Load .lcbignore file if it exists
+	ignoreFilePath := filepath.Join(rootDir, ".lcbignore")
+	matcher, err := ignore.New(ignoreFilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: could not parse .lcbignore: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Walk the directory to find all markdown files
-	files, err := walker.Walk(rootDir)
+	files, err := walker.Walk(rootDir, matcher)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not walk directory: %v\n", err)
 		os.Exit(1)

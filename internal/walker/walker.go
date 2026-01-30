@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/plaid/llm-context-bundler/internal/ignore"
 )
 
 // Default directories to exclude from scanning.
@@ -23,7 +25,8 @@ type FileInfo struct {
 // Walk recursively finds all .md files in the given root directory.
 // Files are returned sorted by depth (shallower first), then alphabetically.
 // Automatically skips .git, node_modules, vendor, and hidden directories.
-func Walk(root string) ([]FileInfo, error) {
+// If matcher is provided, also skips paths matching .lcbignore patterns.
+func Walk(root string, matcher *ignore.Matcher) ([]FileInfo, error) {
 	var files []FileInfo
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -33,6 +36,12 @@ func Walk(root string) ([]FileInfo, error) {
 
 		name := d.Name()
 
+		// Get relative path from root
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+
 		// Skip excluded and hidden directories
 		if d.IsDir() {
 			if defaultExclusions[name] {
@@ -40,6 +49,10 @@ func Walk(root string) ([]FileInfo, error) {
 			}
 			// Skip hidden directories (starting with .) except root
 			if strings.HasPrefix(name, ".") && path != root {
+				return fs.SkipDir
+			}
+			// Check ignore patterns for directories
+			if matcher != nil && matcher.Match(relPath) {
 				return fs.SkipDir
 			}
 			return nil
@@ -55,10 +68,9 @@ func Walk(root string) ([]FileInfo, error) {
 			return nil
 		}
 
-		// Get relative path from root
-		relPath, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
+		// Check ignore patterns for files
+		if matcher != nil && matcher.Match(relPath) {
+			return nil
 		}
 
 		// Calculate depth
