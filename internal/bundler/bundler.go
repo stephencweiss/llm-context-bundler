@@ -17,15 +17,15 @@ const (
 
 // Bundler assembles markdown files into output file(s).
 type Bundler struct {
-	rootDir    string
+	rootDirs   []string
 	outputPath string
 	verbose    bool
 }
 
 // New creates a new Bundler.
-func New(rootDir, outputPath string, verbose bool) *Bundler {
+func New(rootDirs []string, outputPath string, verbose bool) *Bundler {
 	return &Bundler{
-		rootDir:    rootDir,
+		rootDirs:   rootDirs,
 		outputPath: outputPath,
 		verbose:    verbose,
 	}
@@ -33,8 +33,9 @@ func New(rootDir, outputPath string, verbose bool) *Bundler {
 
 // fileContent holds a file's path and its content.
 type fileContent struct {
-	path    string
-	content []byte
+	path        string // Display path (may include source label prefix for multi-dir)
+	sourceLabel string // Source directory label for grouping in TOC
+	content     []byte
 }
 
 // Bundle processes all files and writes them to output file(s).
@@ -42,15 +43,27 @@ type fileContent struct {
 func (b *Bundler) Bundle(files []walker.FileInfo) ([]string, error) {
 	// Read all file contents first
 	var contents []fileContent
+	multiDir := len(b.rootDirs) > 1
+
 	for _, file := range files {
-		content, err := os.ReadFile(filepath.Join(b.rootDir, file.Path))
+		// Read using absolute path from FileInfo
+		absPath := filepath.Join(file.SourceDir, file.Path)
+		content, err := os.ReadFile(absPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read %s: %v\n", file.Path, err)
+			fmt.Fprintf(os.Stderr, "warning: could not read %s: %v\n", absPath, err)
 			continue
 		}
+
+		// For multi-directory mode, prefix display path with source label
+		displayPath := file.Path
+		if multiDir {
+			displayPath = file.SourceLabel + "/" + file.Path
+		}
+
 		contents = append(contents, fileContent{
-			path:    file.Path,
-			content: content,
+			path:        displayPath,
+			sourceLabel: file.SourceLabel,
+			content:     content,
 		})
 	}
 
@@ -131,9 +144,32 @@ func (b *Bundler) writePart(outputPath string, contents []fileContent) error {
 
 	// Write table of contents
 	fmt.Fprintln(file, "## Table of Contents")
-	for _, fc := range contents {
-		anchor := pathToAnchor(fc.path)
-		fmt.Fprintf(file, "- [%s](#%s)\n", fc.path, anchor)
+
+	multiDir := len(b.rootDirs) > 1
+	if multiDir {
+		// Group by source label
+		groups := make(map[string][]fileContent)
+		var order []string
+		for _, fc := range contents {
+			if _, exists := groups[fc.sourceLabel]; !exists {
+				order = append(order, fc.sourceLabel)
+			}
+			groups[fc.sourceLabel] = append(groups[fc.sourceLabel], fc)
+		}
+
+		for _, label := range order {
+			fmt.Fprintf(file, "\n### %s\n", label)
+			for _, fc := range groups[label] {
+				anchor := pathToAnchor(fc.path)
+				fmt.Fprintf(file, "- [%s](#%s)\n", fc.path, anchor)
+			}
+		}
+	} else {
+		// Single directory: flat TOC
+		for _, fc := range contents {
+			anchor := pathToAnchor(fc.path)
+			fmt.Fprintf(file, "- [%s](#%s)\n", fc.path, anchor)
+		}
 	}
 	fmt.Fprintln(file)
 

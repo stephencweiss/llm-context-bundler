@@ -4,9 +4,10 @@ A CLI tool that recursively scans a directory for Markdown files and bundles the
 
 ## Features
 
+- **Multi-Directory Support** - Bundle files from multiple directories with `--dir=./docs,./specs`
 - **Recursive Traversal** - Walks the entire directory tree to find all Markdown files
 - **Smart Filtering** - Automatically excludes `.git`, `node_modules`, `vendor`, and hidden directories
-- **Custom Exclusions** - Support for `.lcbignore` file with gitignore-style patterns
+- **Custom Exclusions** - Support for `.lcbignore` file with gitignore-style patterns (per-directory)
 - **Table of Contents** - Generates a navigable TOC at the top of each output file
 - **Document Separation** - Uses HTML comments (`<!-- SOURCE: path -->`) and horizontal rules for clean separation
 - **Auto-Splitting** - Automatically splits output into multiple files if total size exceeds 100 MB
@@ -85,6 +86,9 @@ lcb --output=bundle.md
 # Bundle a specific directory
 lcb --dir=./docs
 
+# Bundle multiple directories
+lcb --dir=./docs,./specs,./guides
+
 # Show detailed progress
 lcb --verbose
 
@@ -100,7 +104,7 @@ lcb --help
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--output` | `context.md` | Output file path |
-| `--dir` | `.` | Root directory to scan |
+| `--dir` | `.` | Root directory(s) to scan (comma-separated for multiple) |
 | `--verbose` | `false` | Enable verbose output |
 | `--version` | - | Show version and exit |
 
@@ -126,6 +130,46 @@ The following are always excluded:
 - `vendor` directory
 - Hidden directories (starting with `.`)
 - Hidden files (starting with `.`)
+
+## Multi-Directory Bundling
+
+When specifying multiple directories, the output clearly identifies each file's source:
+
+```bash
+lcb --dir=./docs,./specs
+```
+
+Output format with multiple directories:
+
+```markdown
+# Bundled Context
+
+## Table of Contents
+
+### docs
+- [docs/README.md](#docs-readmemd)
+- [docs/api/endpoints.md](#docs-apiendpointsmd)
+
+### specs
+- [specs/overview.md](#specs-overviewmd)
+
+---
+
+<!-- SOURCE: docs/README.md -->
+...
+```
+
+### Per-Directory Ignore Files
+
+Each directory can have its own `.lcbignore` file. Patterns in each file only apply to that directory's files.
+
+### Overlapping Directories
+
+If you specify directories that overlap (e.g., `./docs` and `./docs/api`), the tool will warn you and deduplicate files automatically.
+
+### Label Collisions
+
+If two directories have the same basename (e.g., `./project1/docs` and `./project2/docs`), parent context is automatically added to create unique labels: `project1-docs` and `project2-docs`.
 
 ## Output Format
 

@@ -17,13 +17,13 @@ var version = "0.1.0"
 func main() {
 	var (
 		outputPath  string
-		rootDir     string
+		dirsFlag    string
 		verbose     bool
 		showVersion bool
 	)
 
 	flag.StringVar(&outputPath, "output", "context.md", "output file path")
-	flag.StringVar(&rootDir, "dir", ".", "root directory to scan")
+	flag.StringVar(&dirsFlag, "dir", ".", "root directory(s) to scan (comma-separated for multiple)")
 	flag.BoolVar(&verbose, "verbose", false, "enable verbose output")
 	flag.BoolVar(&showVersion, "version", false, "show version and exit")
 
@@ -35,10 +35,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  lcb                           # Bundle current directory to context.md\n")
-		fmt.Fprintf(os.Stderr, "  lcb --output=bundle.md        # Custom output filename\n")
-		fmt.Fprintf(os.Stderr, "  lcb --dir=./docs              # Bundle specific directory\n")
-		fmt.Fprintf(os.Stderr, "  lcb --verbose                 # Show detailed progress\n\n")
+		fmt.Fprintf(os.Stderr, "  lcb                                   # Bundle current directory to context.md\n")
+		fmt.Fprintf(os.Stderr, "  lcb --output=bundle.md                # Custom output filename\n")
+		fmt.Fprintf(os.Stderr, "  lcb --dir=./docs                      # Bundle specific directory\n")
+		fmt.Fprintf(os.Stderr, "  lcb --dir=./docs,./specs,./guides     # Bundle multiple directories\n")
+		fmt.Fprintf(os.Stderr, "  lcb --verbose                         # Show detailed progress\n\n")
 		fmt.Fprintf(os.Stderr, "Ignore patterns:\n")
 		fmt.Fprintf(os.Stderr, "  Create a .lcbignore file with gitignore-style patterns to exclude files.\n")
 		fmt.Fprintf(os.Stderr, "  Default exclusions: .git, node_modules, vendor, hidden directories\n\n")
@@ -53,44 +54,94 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Resolve root directory to absolute path
-	if rootDir == "." {
-		var err error
-		rootDir, err = os.Getwd()
+	// Parse comma-separated directories
+	rawDirs := strings.Split(dirsFlag, ",")
+	var dirs []string
+	for _, d := range rawDirs {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		dirs = append(dirs, d)
+	}
+
+	if len(dirs) == 0 {
+		fmt.Fprintln(os.Stderr, "error: no directories specified")
+		os.Exit(1)
+	}
+
+	// Resolve all directories to absolute paths and validate
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: could not get working directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	var absDirs []string
+	for _, d := range dirs {
+		absDir := d
+		if d == "." {
+			absDir = cwd
+		} else if !filepath.IsAbs(d) {
+			absDir = filepath.Join(cwd, d)
+		}
+
+		info, err := os.Stat(absDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: could not get working directory: %v\n", err)
+			fmt.Fprintf(os.Stderr, "error: directory does not exist: %s\n", d)
 			os.Exit(1)
 		}
+		if !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "error: not a directory: %s\n", d)
+			os.Exit(1)
+		}
+
+		absDirs = append(absDirs, absDir)
 	}
 
-	// Verify root directory exists
-	info, err := os.Stat(rootDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: directory does not exist: %s\n", rootDir)
-		os.Exit(1)
-	}
-	if !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "error: not a directory: %s\n", rootDir)
-		os.Exit(1)
-	}
-
-	// Load .lcbignore file if it exists
-	ignoreFilePath := filepath.Join(rootDir, ".lcbignore")
-	matcher, err := ignore.New(ignoreFilePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: could not parse .lcbignore: %v\n", err)
-		os.Exit(1)
+	// Check for overlapping directories
+	overlaps := walker.DetectOverlaps(absDirs)
+	for _, pair := range overlaps {
+		fmt.Fprintf(os.Stderr, "warning: directory %s contains %s - files may be deduplicated\n", pair[0], pair[1])
 	}
 
 	if verbose {
-		fmt.Fprintf(os.Stderr, "scanning %s\n", rootDir)
+		if len(absDirs) == 1 {
+			fmt.Fprintf(os.Stderr, "scanning %s\n", absDirs[0])
+		} else {
+			fmt.Fprintf(os.Stderr, "scanning %d directories:\n", len(absDirs))
+			for _, d := range absDirs {
+				fmt.Fprintf(os.Stderr, "  %s\n", d)
+			}
+		}
 	}
 
-	// Walk the directory to find all markdown files
-	files, err := walker.Walk(rootDir, matcher)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: could not scan directory: %v\n", err)
-		os.Exit(1)
+	// Walk the directory(s) to find all markdown files
+	var files []walker.FileInfo
+	if len(absDirs) == 1 {
+		// Single directory - use original Walk for backward compatibility
+		ignoreFilePath := filepath.Join(absDirs[0], ".lcbignore")
+		matcher, err := ignore.New(ignoreFilePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: could not parse .lcbignore: %v\n", err)
+			os.Exit(1)
+		}
+		files, err = walker.Walk(absDirs[0], matcher)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: could not scan directory: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		// Multiple directories - use WalkMultiple with per-directory ignore
+		matcherFunc := func(root string) (*ignore.Matcher, error) {
+			ignoreFilePath := filepath.Join(root, ".lcbignore")
+			return ignore.New(ignoreFilePath)
+		}
+		files, err = walker.WalkMultiple(absDirs, matcherFunc)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: could not scan directories: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if len(files) == 0 {
@@ -106,7 +157,7 @@ func main() {
 	}
 
 	// Bundle the files
-	b := bundler.New(rootDir, outputPath, verbose)
+	b := bundler.New(absDirs, outputPath, verbose)
 	outputFiles, err := b.Bundle(files)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not bundle files: %v\n", err)
